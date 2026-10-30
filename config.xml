@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='utf-8'?>
+<widget id="com.obd2pro.app" version="1.0.0"
+        xmlns="http://www.w3.org/ns/widgets"
+        xmlns:cdv="http://cordova.apache.org/ns/1.0"
+        xmlns:android="http://schemas.android.com/apk/res/android">
+    <name>OBD2 Pro</name>
+    <description>Diagnostic OBD2 avec interface ELM327</description>
+    <author email="contact@obd2pro.com" href="https://obd2pro.com">OBD2 Pro</author>
+
+    <content src="index.html" />
+    <access origin="*" />
+    <allow-intent href="http://*/*" />
+    <allow-intent href="https://*/*" />
+
+    <preference name="LogLevel" value="DEBUG" />
+    <preference name="AndroidXEnabled" value="true" />
+    <preference name="Orientation" value="portrait" />
+
+    <platform name="android">
+        <preference name="android-minSdkVersion" value="22" />
+        <preference name="android-targetSdkVersion" value="33" />
+    </platform>
+</widget>

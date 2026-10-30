@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: gap: blob:">
+<title>OBD2 Pro</title>
+<style>
+html,body{margin:0;height:100%;background:#0b1220;color:#e6edf7;font-family:'Segoe UI',Roboto,sans-serif;overflow:hidden}
+#app{display:flex;flex-direction:column;height:100%}
+header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#111a2e;border-bottom:2px solid #00e5ff}
+h1{margin:0;font-size:17px;color:#00e5ff;letter-spacing:1px}
+.badge{padding:3px 9px;border-radius:10px;font-size:11px;font-weight:bold}
+.off{background:#b83b5e}.mid{background:#e0a100}.on{background:#00b16a}.sim{background:#7c4dff}
+main{flex:1;overflow-y:auto;padding:10px}
+.tab{display:none}.tab.actif{display:block}
+nav{display:flex;background:#111a2e;border-top:1px solid #243354}
+nav button{flex:1;padding:11px 0;background:none;border:0;color:#7f93b8;font-size:12px}
+nav button.actif{color:#00e5ff;border-top:2px solid #00e5ff}
+#grille{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tuile{background:#162038;border-radius:8px;padding:10px;border:1px solid #243354}
+.tuile.alerte{border-color:#ff4d6d;background:#2a1520}
+.nom{font-size:11px;color:#7f93b8}
+.val{font-size:28px;font-weight:bold;color:#00e5ff;font-family:monospace}
+.val small{font-size:12px;color:#7f93b8;margin-left:4px}
+.barre{height:5px;background:#243354;border-radius:3px;margin-top:6px}
+.barre i{display:block;height:100%;width:0;background:#00e5ff;border-radius:3px;transition:width .3s}
+.vide{grid-column:1/3;text-align:center;color:#7f93b8;padding:30px 10px}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+button.act{flex:1;padding:10px;border:0;border-radius:6px;background:#00e5ff;color:#06101f;font-weight:bold;font-size:13px}
+button.danger{background:#ff4d6d;color:#fff}
+ul{list-style:none;margin:0;padding:0}
+li{background:#162038;border-left:4px solid #00e5ff;margin-bottom:6px;padding:9px 10px;border-radius:0 6px 6px 0;font-size:13px}
+li.mal{border-left-color:#ff4d6d}
+li b{font-family:monospace;color:#fff;margin-right:6px}
+li small{display:block;color:#7f93b8;margin-top:2px}
+p.note{font-size:12px;color:#7f93b8}
+pre{background:#060c18;color:#7fe3a1;font-size:10px;padding:8px;border-radius:6px;height:130px;overflow:auto;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<div id="app">
+  <header><h1>🚗 OBD2 PRO</h1><span id="etat" class="badge off">Déconnecté</span></header>
+  <main>
+    <section id="tab-live" class="tab actif">
+      <div id="grille"><div class="vide">Onglet 🔌 : connectez votre ELM327, ou lancez la simulation.</div></div>
+    </section>
+    <section id="tab-dtc" class="tab">
+      <div class="btns">
+        <button class="act" onclick="lireDefauts('03')">Lire les défauts</button>
+        <button class="act" onclick="lireDefauts('07')">En attente</button>
+        <button class="act danger" onclick="effacerDefauts()">Effacer</button>
+      </div>
+      <div id="mil"></div>
+      <ul id="listeDtc"><li>Aucune lecture effectuée.</li></ul>
+    </section>
+    <section id="tab-info" class="tab">
+      <div class="btns">
+        <button class="act" onclick="actualiserInfos()">Actualiser</button>
+        <button class="act" onclick="lireVIN()">Lire le VIN</button>
+      </div>
+      <ul id="infos"><li>Connectez-vous pour afficher les informations.</li></ul>
+      <p class="note">Ne manipulez pas l'application en conduisant : faites-vous assister d'un passager.</p>
+    </section>
+    <section id="tab-conn" class="tab">
+      <p class="note">1) Branchez l'ELM327 et mettez le contact. 2) Appairez-le dans les réglages Bluetooth d'Android (code 1234 ou 0000). 3) Touchez-le dans la liste.</p>
+      <div class="btns">
+        <button class="act" onclick="listerAppareils()">🔄 Appareils appairés</button>
+        <button class="act" onclick="demarrerSimulation()">🧪 Simulation</button>
+        <button class="act danger" onclick="deconnecter()">Déconnecter</button>
+      </div>
+      <ul id="appareils"></ul>
+      <p class="note">Journal des échanges :</p>
+      <pre id="journal"></pre>
+    </section>
+  </main>
+  <nav>
+    <button id="n-live" class="actif" onclick="afficherOnglet('live')">📊<br>Mesures</button>
+    <button id="n-dtc" onclick="afficherOnglet('dtc')">⚠️<br>Défauts</button>
+    <button id="n-info" onclick="afficherOnglet('info')">ℹ️<br>Infos</button>
+    <button id="n-conn" onclick="afficherOnglet('conn')">🔌<br>Connexion</button>
+  </nav>
+</div>
+
+<script src="cordova.js"></script>
+<script>
+const SPP = '00001101-0000-1000-8000-00805F9B34FB';
+const $ = id => document.getElementById(id);
+const hex2 = n => n.toString(16).toUpperCase().padStart(2, '0');
+const pause = ms => new Promise(r => setTimeout(r, ms));
+const bt = () => window.bluetoothClassicSerial || window.bluetoothSerial;
+
+let modeSim = false, connecte = false, enBoucle = false, onglet = 'live';
+let attente = null, fileEnvoi = Promise.resolve(), pidsOK = [], journal = [];
+
+// ---------- PID standards (mode 01) ----------
+const PIDS = {
+  '010C': { nom: 'Régime moteur', u: 'tr/min', min: 0, max: 7000, d: 0, f: (a, b) => (a * 256 + b) / 4, alerte: v => v > 6500 },
+  '010D': { nom: 'Vitesse', u: 'km/h', min: 0, max: 240, d: 0, f: a => a },
+  '0105': { nom: 'Liquide refroid.', u: '°C', min: -40, max: 130, d: 0, f: a => a - 40, alerte: v => v > 105 },
+  '0104': { nom: 'Charge moteur', u: '%', min: 0, max: 100, d: 0, f: a => a * 100 / 255 },
+  '0111': { nom: 'Papillon', u: '%', min: 0, max: 100, d: 0, f: a => a * 100 / 255 },
+  '010F': { nom: 'Air admission', u: '°C', min: -40, max: 100, d: 0, f: a => a - 40 },
+  '010B': { nom: 'Pression admission', u: 'kPa', min: 0, max: 255, d: 0, f: a => a },
+  '0110': { nom: "Débit d'air (MAF)", u: 'g/s', min: 0, max: 300, d: 1, f: (a, b) => (a * 256 + b) / 100 },
+  '012F': { nom: 'Niveau carburant', u: '%', min: 0, max: 100, d: 0, f: a => a * 100 / 255, alerte: v => v < 10 },
+  '015C': { nom: 'Température huile', u: '°C', min: -40, max: 160, d: 0, f: a => a - 40, alerte: v => v > 130 },
+  '0142': { nom: 'Tension module', u: 'V', min: 8, max: 16, d: 1, f: (a, b) => (a * 256 + b) / 1000, alerte: v => v < 11.8 || v > 15 }
+};
+const RAPIDES = ['010C', '010D'];
+
+const DTC_TXT = {
+  P0100: "Circuit du débitmètre d'air (MAF)", P0101: 'Débitmètre d\'air hors plage', P0113: "Sonde température air admission : signal haut",
+  P0117: 'Sonde température liquide : signal bas', P0118: 'Sonde température liquide : signal haut', P0128: 'Thermostat : température trop basse',
+  P0133: 'Sonde O2 amont : réponse lente', P0134: 'Sonde O2 amont : pas d\'activité', P0171: 'Mélange trop pauvre (banc 1)',
+  P0172: 'Mélange trop riche (banc 1)', P0174: 'Mélange trop pauvre (banc 2)', P0300: "Ratés d'allumage multiples",
+  P0335: 'Capteur de vilebrequin : circuit', P0340: "Capteur d'arbre à cames : circuit", P0401: 'EGR : débit insuffisant',
+  P0420: 'Catalyseur : efficacité insuffisante (banc 1)', P0430: 'Catalyseur : efficacité insuffisante (banc 2)',
+  P0440: 'Système EVAP : défaut', P0442: 'EVAP : petite fuite', P0455: 'EVAP : grosse fuite', P0500: 'Capteur de vitesse véhicule',
+  P0505: 'Régulation du ralenti', P0562: 'Tension du système trop basse', P0563: 'Tension du système trop haute', P0700: 'Système de transmission : défaut'
+};
+function descDTC(c) {
+  if (DTC_TXT[c]) return DTC_TXT[c];
+  const m = c.match(/^P030([1-9])$/);
+  if (m) return "Raté d'allumage cylindre " + m[1];
+  return 'Voir la documentation constructeur pour ce code.';
+}
+
+// ---------- Journal et affichage ----------
+function log(m) { journal.push(m); if (journal.length > 60) journal.shift(); const e = $('journal'); if (e) { e.textContent = journal.join('\n'); e.scrollTop = e.scrollHeight; } }
+function etat(txt, cls) { const e = $('etat'); e.textContent = txt; e.className = 'badge ' + cls; }
+function afficherOnglet(n) {
+  onglet = n;
+  ['live', 'dtc', 'info', 'conn'].forEach(t => {
+    $('tab-' + t).className = 'tab' + (t === n ? ' actif' : '');
+    $('n-' + t).className = t === n ? 'actif' : '';
+  });
+}
+
+// ---------- Transport ELM327 ----------
+function nettoyer(d) {
+  return String(d).replace(/\0/g, '').replace(/>/g, '').split(/[\r\n]+/).map(l => l.trim())
+    .filter(l => l && !/^(SEARCHING|BUS INIT: ?\.*OK)/i.test(l)).join('\r');
+}
+function envoyer(cmd, delai) {
+  const p = fileEnvoi.then(() => envoiBrut(cmd, delai || 4000));
+  fileEnvoi = p.catch(() => {});
+  return p;
+}
+function envoiBrut(cmd, delai) {
+  return new Promise((res, rej) => {
+    if (modeSim) { setTimeout(() => { const r = simReponse(cmd); log('> ' + cmd + '\n< ' + r.replace(/\r/g, ' | ')); res(r); }, 30); return; }
+    const b = bt();
+    if (!b || !connecte) return rej(new Error('Non connecté'));
+    let fini = false;
+    const t = setTimeout(() => { if (!fini) { fini = true; attente = null; log('> ' + cmd + '\n< (pas de réponse)'); rej(new Error('Timeout ' + cmd)); } }, delai);
+    attente = function (data) {
+      if (fini) return; fini = true; clearTimeout(t); attente = null;
+      const r = nettoyer(data); log('> ' + cmd + '\n< ' + r.replace(/\r/g, ' | ')); res(r);
+    };
+    b.write(cmd + '\r', function () {}, function () { if (!fini) { fini = true; clearTimeout(t); attente = null; rej(new Error('Écriture échouée')); } });
+  });
+}
+
+// ---------- Décodage ----------
+function lignesHex(rep) {
+  return rep.split('\r').map(l => l.replace(/\s+/g, '').toUpperCase()).filter(l => /^[0-9A-F:]+$/.test(l))
+    .map(l => /^[0-9A-F]:/.test(l) ? l.slice(2) : l).filter(l => !/^[0-9A-F]{3}$/.test(l));
+}
+async function lirePID(pid, delai) {
+  const rep = await envoyer(pid, delai);
+  const pre = '41' + pid.slice(2);
+  for (const l of lignesHex(rep)) if (l.startsWith(pre)) return (l.slice(4).match(/.{2}/g) || []).map(h => parseInt(h, 16));
+  return null;
+}
+async function detecterPIDs() {
+  const ok = [];
+  for (const base of [0x00, 0x20, 0x40, 0x60]) {
+    const b = await lirePID('01' + hex2(base), 10000);
+    if (!b || b.length < 4) break;
+    for (let i = 0; i < 32; i++) if ((b[i >> 3] >> (7 - (i % 8))) & 1) ok.push(base + i + 1);
+    if (!(b[3] & 1)) break;
+  }
+  return ok;
+}
+function decoderDTC(h4) { const n = parseInt(h4[0], 16); return 'PCBU'[n >> 2] + (n & 3) + h4.slice(1); }
+function extraireCodes(L, pre) {
+  const blocs = L.length && L.every(l => l.startsWith(pre)) ? L.map(l => l.slice(2))
+    : [(j => { const i = j.indexOf(pre); return i >= 0 ? j.slice(i + 2) : ''; })(L.join(''))];
+  const codes = [];
+  blocs.forEach(b => {
+    if (b.length % 4 === 2) b = b.slice(2); // octet « nombre de codes » (protocole CAN)
+    (b.match(/.{4}/g) || []).forEach(c => { if (c !== '0000') { const d = decoderDTC(c); if (codes.indexOf(d) < 0) codes.push(d); } });
+  });
+  return codes;
+}
+
+// ---------- Session ----------
+async function initELM() {
+  await envoyer('ATZ', 3500);
+  for (const c of ['ATE0', 'ATL0', 'ATS0', 'ATH0', 'ATAT1', 'ATSP0']) await envoyer(c);
+  const r = await envoyer('0100', 15000);
+  if (/UNABLE|ERROR|NO DATA|\?/.test(r)) throw new Error('Pas de réponse du véhicule. Contact mis ?');
+  pidsOK = await detecterPIDs();
+}
+async function demarrerSession() {
+  etat('Initialisation...', 'mid');
+  try {
+    await initELM();
+    construireTuiles();
+    etat(modeSim ? 'Simulation' : 'Connecté', modeSim ? 'sim' : 'on');
+    try { if (window.plugins && window.plugins.insomnia) window.plugins.insomnia.keepAwake(); } catch (e) {}
+    afficherOnglet('live');
+    boucleLive();
+  } catch (e) {
+    log('ERREUR : ' + e.message); alert('Échec : ' + e.message); deconnecter();
+  }
+}
+function demarrerSimulation() { modeSim = true; connecte = true; demarrerSession(); }
+function deconnecter() {
+  enBoucle = false; connecte = false;
+  try { if (!modeSim && bt()) bt().disconnect(function () {}, function () {}); } catch (e) {}
+  modeSim = false; etat('Déconnecté', 'off');
+  try { if (window.plugins && window.plugins.insomnia) window.plugins.insomnia.allowSleepAgain(); } catch (e) {}
+}
+function pret() { if (!connecte) { alert("Connectez-vous d'abord (onglet 🔌)."); return false; } return true; }
+
+// ---------- Mesures en direct ----------
+function construireTuiles() {
+  const g = $('grille'); g.innerHTML = '';
+  const liste = Object.keys(PIDS).filter(p => pidsOK.indexOf(parseInt(p.slice(2), 16)) >= 0);
+  liste.forEach(p => {
+    g.insertAdjacentHTML('beforeend', '<div class="tuile" id="t' + p + '"><div class="nom">' + PIDS[p].nom +
+      '</div><div class="val"><span id="v' + p + '">--</span><small>' + PIDS[p].u + '</small></div><div class="barre"><i id="b' + p + '"></i></div></div>');
+  });
+  g.insertAdjacentHTML('beforeend', '<div class="tuile" id="tBATT"><div class="nom">Batterie (ELM327)</div><div class="val"><span id="vBATT">--</span><small>V</small></div></div>');
+  if (!liste.length) g.insertAdjacentHTML('afterbegin', '<div class="vide">Aucune mesure standard annoncée par ce véhicule.</div>');
+  g.pids = liste;
+}
+function majTuile(p, v) {
+  const d = PIDS[p], t = $('t' + p); if (!t) return;
+  $('v' + p).textContent = v.toFixed(d.d);
+  $('b' + p).style.width = Math.max(0, Math.min(100, (v - d.min) / (d.max - d.min) * 100)) + '%';
+  t.className = 'tuile' + (d.alerte && d.alerte(v) ? ' alerte' : '');
+}
+async function boucleLive() {
+  if (enBoucle) return; enBoucle = true;
+  let cycle = 0, erreurs = 0;
+  while (connecte && enBoucle) {
+    if (onglet !== 'live') { await pause(400); continue; }
+    try {
+      for (const p of $('grille').pids || []) {
+        if (!connecte || !enBoucle || onglet !== 'live') break;
+        if (RAPIDES.indexOf(p) < 0 && cycle % 3) continue;
+        const b = await lirePID(p);
+        if (b && b.length) majTuile(p, PIDS[p].f(b[0], b[1] || 0));
+      }
+      if (cycle % 6 === 0) {
+        const r = await envoyer('ATRV'), m = r.match(/([\d.]+)\s*V/i);
+        if (m && $('vBATT')) $('vBATT').textContent = m[1];
+      }
+      erreurs = 0; cycle++;
+    } catch (e) {
+      if (++erreurs >= 5) { log('Liaison perdue.'); etat('Liaison perdue', 'off'); connecte = false; enBoucle = false; alert('Liaison perdue avec l\'ELM327.'); }
+      await pause(300);
+    }
+  }
+  enBoucle = false;
+}
+
+// ---------- Défauts ----------
+async function afficherMIL() {
+  const b = await lirePID('0101');
+  if (b && b.length) $('mil').innerHTML = '<li class="' + ((b[0] & 0x80) ? 'mal' : '') + '">Voyant moteur : <b>' + ((b[0] & 0x80) ? 'ALLUMÉ' : 'éteint') + '</b> · ' + (b[0] & 0x7F) + ' code(s) mémorisé(s)</li>';
+}
+async function lireDefauts(mode) {
+  if (!pret()) return;
+  const ul = $('listeDtc'); ul.innerHTML = '<li>Lecture...</li>';
+  try {
+    await afficherMIL();
+    const rep = await envoyer(mode, 9000);
+    const codes = /NO DATA/.test(rep) ? [] : extraireCodes(lignesHex(rep), mode === '03' ? '43' : '47');
+    const titre = mode === '03' ? 'enregistré(s)' : 'en attente';
+    ul.innerHTML = codes.length ? codes.map(c => '<li class="mal"><b>' + c + '</b>' + descDTC(c) + '<small>Code ' + titre + '</small></li>').join('')
+      : '<li>✅ Aucun code ' + titre + '.</li>';
+  } catch (e) { ul.innerHTML = '<li class="mal">Lecture impossible : ' + e.message + '</li>'; }
+}
+async function effacerDefauts() {
+  if (!pret()) return;
+  if (!confirm("Effacer les codes défaut et les données figées ?\nCela réinitialise aussi les moniteurs d'émissions et ne répare pas la panne : le code reviendra si le défaut persiste.")) return;
+  try {
+    const r = await envoyer('04', 9000);
+    alert(/44/.test(r) ? 'Codes effacés.' : 'Réponse inattendue : ' + r);
+    lireDefauts('03');
+  } catch (e) { alert('Échec : ' + e.message); }
+}
+
+// ---------- Infos ----------
+async function actualiserInfos() {
+  if (!pret()) return;
+  const L = [];
+  try {
+    L.push(['Interface', await envoyer('ATI')]);
+    L.push(['Protocole', await envoyer('ATDP')]);
+    L.push(['Tension batterie', await envoyer('ATRV')]);
+    L.push(['Mesures supportées', pidsOK.length + ' PID']);
+  } catch (e) { L.push(['Erreur', e.message]); }
+  $('infos').innerHTML = L.map(x => '<li><small>' + x[0] + '</small>' + x[1] + '</li>').join('');
+}
+async function lireVIN() {
+  if (!pret()) return;
+  try {
+    const rep = await envoyer('0902', 9000);
+    if (/NO DATA|\?/.test(rep)) { alert('VIN non disponible sur ce véhicule.'); return; }
+    const L = lignesHex(rep);
+    const hex = L.length && L.every(l => l.startsWith('4902')) ? L.map(l => l.slice(6)).join('') : (j => { const i = j.indexOf('4902'); return i >= 0 ? j.slice(i + 6) : ''; })(L.join(''));
+    const vin = (hex.match(/.{2}/g) || []).map(h => parseInt(h, 16)).filter(n => n >= 0x20 && n < 0x7f).map(n => String.fromCharCode(n)).join('');
+    $('infos').insertAdjacentHTML('afterbegin', '<li><small>VIN</small>' + (vin || 'illisible') + '</li>');
+  } catch (e) { alert('Lecture du VIN impossible : ' + e.message); }
+}
+
+// ---------- Bluetooth ----------
+function demanderPermissions(cb) {
+  try {
+    const p = window.cordova && cordova.plugins && cordova.plugins.permissions;
+    if (p) return p.requestPermissions(['android.permission.BLUETOOTH_CONNECT', 'android.permission.BLUETOOTH_SCAN'], () => cb(), () => cb());
+  } catch (e) {}
+  cb();
+}
+function listerAppareils() {
+  const b = bt(); if (!b) { alert('Bluetooth indisponible (testez la simulation).'); return; }
+  demanderPermissions(() => b.list(function (devs) {
+    const dernier = (function () { try { return localStorage.getItem('obd_dernier'); } catch (e) { return null; } })();
+    devs.sort((a, c) => (c.address === dernier) - (a.address === dernier));
+    $('appareils').innerHTML = devs.length ? '' : '<li>Aucun appareil appairé : appairez l\'ELM327 dans les réglages Bluetooth.</li>';
+    devs.forEach(d => {
+      const li = document.createElement('li');
+      li.innerHTML = '<b>' + (d.name || 'Sans nom') + '</b>' + (d.address === dernier ? '⭐' : '') + '<small>' + d.address + ' · toucher pour connecter</small>';
+      li.onclick = () => connecterA(d.address, d.name);
+      $('appareils').appendChild(li);
+    });
+  }, e => alert('Liste impossible : ' + e)));
+}
+function appelConnexion(fn, adr, ok, ko) {
+  const b = bt(), f = b[fn];
+  if (!f) return ko('Fonction absente');
+  if (f.length >= 4) f.call(b, adr, [SPP], ok, ko); else f.call(b, adr, ok, ko);
+}
+function connecterA(adr, nom) {
+  etat('Connexion...', 'mid'); modeSim = false;
+  let etabli = false;
+  const reussi = function () {
+    if (etabli) return; etabli = true; connecte = true;
+    try { localStorage.setItem('obd_dernier', adr); } catch (e) {}
+    bt().subscribe('>', function (d) { if (attente) attente(d); }, function () {});
+    demarrerSession();
+  };
+  const perdu = function () { if (connecte) { connecte = false; enBoucle = false; etat('Liaison perdue', 'off'); } };
+  const echec = function () { etat('Échec connexion', 'off'); alert("Connexion impossible. L'ELM327 est-il appairé et le contact mis ?"); };
+  appelConnexion('connect', adr, reussi, function () {
+    if (etabli) { perdu(); return; } // déconnexion après une connexion réussie
+    log('Connexion sécurisée échouée, essai non sécurisé...');
+    appelConnexion('connectInsecure', adr, reussi, function () { if (etabli) perdu(); else echec(); });
+  });
+}
+
+// ---------- Simulation (sans voiture) ----------
+const SIM_PIDS = [0x01, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x2F, 0x42];
+function masque(base) {
+  const b = [0, 0, 0, 0];
+  SIM_PIDS.forEach(p => { const k = p - base - 1; if (k >= 0 && k < 32) b[k >> 3] |= 1 << (7 - (k % 8)); });
+  if (SIM_PIDS.some(p => p > base + 32)) b[3] |= 1;
+  return b;
+}
+const hx = a => a.map(hex2).join('');
+function simReponse(c) {
+  const t = Date.now() / 1000;
+  if (c === 'ATRV') return (12.6 + 0.3 * Math.sin(t / 5)).toFixed(1) + 'V';
+  if (c === 'ATI' || c === 'ATZ') return 'ELM327 v1.5';
+  if (c === 'ATDP') return 'AUTO, ISO 15765-4 (CAN 11/500)';
+  if (/^AT/.test(c)) return 'OK';
+  if (c === '03') return '43' + '02' + '0133' + '0420' + '0000';
+  if (c === '07') return '47' + '01' + '0171' + '0000';
+  if (c === '04') return '44';
+  if (c === '0902') return '490201' + Array.from('VF1SIMULATION0001').map(ch => hex2(ch.charCodeAt(0))).join('');
+  if (c === '0101') return '410182' + '07E500';
+  const m = c.match(/^01([0-9A-F]{2})$/);
+  if (!m) return 'NO DATA';
+  const p = parseInt(m[1], 16);
+  if (p % 0x20 === 0) return '41' + m[1] + hx(masque(p));
+  const rpm = Math.round((1800 + 1200 * Math.sin(t / 3)) * 4), kmh = Math.round(60 + 40 * Math.sin(t / 7));
+  const v = {
+    0x04: [Math.round((35 + 15 * Math.sin(t / 2)) * 2.55)], 0x05: [130], 0x0B: [35], 0x0C: [rpm >> 8, rpm & 255], 0x0D: [kmh],
+    0x0F: [68], 0x10: [2, 8], 0x11: [46], 0x2F: [158], 0x42: [0x37, 0x14]
+  }[p];
+  return v ? '41' + m[1] + hx(v) : 'NO DATA';
+}
+</script>
+</body>
+</html>
